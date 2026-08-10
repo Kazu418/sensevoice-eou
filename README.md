@@ -1,74 +1,108 @@
 # sensevoice-turn
 
-**SenseVoice の 1 回の推論から「文字起こし」と「話し終わったか（end-of-turn）」を同時に得る。**
+**Get the transcript *and* "did they finish talking?" out of a single SenseVoice forward pass.**
 
-音声アシスタントで一番いらつくのは、**言い終わっていないのに切られる**ことです。
-VAD の無音タイマーだけでは「考えている間の沈黙」と「言い終わった沈黙」を区別できません。
+The most annoying failure in a voice assistant is being **cut off mid-sentence**. A silence
+timer can't tell the difference between *thinking* silence and *finished* silence — that
+distinction lives in the words and in the intonation, not in the length of the gap.
 
-このリポジトリは、**すでに動かしている ASR の encoder をそのまま使って**ターン判定します。
-追加のモデルを常駐させないので、Raspberry Pi のような小さな機械でも実質ゼロコストです。
+This repo answers it using the **ASR encoder you are already running**. No second model is
+loaded, so the turn decision is essentially free — small enough to run on a Raspberry Pi.
 
-```
-音声 ──► SenseVoice encoder ──┬─► CTC 射影    ─► 文字起こし（従来どおり）
-        （1 回だけ前進）        └─► turn ヘッド ─► 「話し終わったか」の確率
-                                    ← 追加は 2048→1 の線形 1 層（30KB）
-```
-
-同じ文字起こしでも、**語尾の抑揚だけで判定が反転します**:
+<!-- TODO: docs/architecture.svg — one pass, two heads -->
 
 ```
-[END ] p=1.000  「電気消したいんだけど。」   ← 語尾を下げた（言い切り）→ 確定してよい
-[WAIT] p=0.007  「電気消したいんだけど。」   ← 語尾は平坦（まだ続く）→ 待つべき
+audio ──► SenseVoice encoder ──┬─► CTC projection ─► transcript  (as before)
+        (one forward pass)     └─► turn head      ─► P(end of turn)
+                                   └ a single 2048→1 linear layer (30 KB)
 ```
 
-## なぜ別モデルではなくこれなのか
-
-| | このリポジトリ | Pipecat Smart Turn v3 | LiveKit Turn Detector |
-|---|---|---|---|
-| 追加モデル | **なし**（ASR と共有） | 8MB / 8M params | 66MB / 135M params |
-| 追加レイテンシ | **ほぼ 0**（同じ前進を再利用） | 別モデルの推論が必要 | 別モデルの推論が必要 |
-| 判定に使う情報 | 意味 **＋** 抑揚 | 抑揚（音のみ） | 意味 ＋ 抑揚 |
-| 文字起こし | **同じパスで一緒に出る** | 別途 ASR が必要 | 別途 ASR（多くはクラウド） |
-
-汎用モデルは多言語・不特定話者向けに作られているため、特定の用途では取りこぼします。
-このリポジトリは**自分の声・自分のコマンドで学習し直せる**ことを前提にしています
-（手元の実測では、汎用モデルで 12.5% しか区別できなかった抑揚ペアが 88% になりました）。
-
-## 仕組み
-
-SenseVoice-Small の配布 ONNX は encoder と CTC 射影が 1 グラフに融合していて、
-出力は `logits` だけです。ターン判定に使いたいフレーム埋め込みは内部に隠れています。
-
-そこで**再 export せず、既存の ONNX に出力を 1 本足す**「手術」をします
-（CTC 射影の入力テンソルをグラフ出力に追加するだけ。fp32 / int8 の両方で動きます）。
-
-あとはその埋め込みを 1 ベクトルに畳んで、小さな分類器を載せるだけです。
-語尾の抑揚を見る必要があるので、全体平均だけでなく**末尾を厚く**取ります:
+Same words, opposite decision — the model is listening to the **prosody**:
 
 ```
-[全体平均, 末尾 8 フレーム平均, 最終フレーム, 特殊枠平均] = 512 × 4 = 2048 次元
+[END ] p=1.000  "電気消したいんだけど。"   (falling tone — done)  → commit
+[WAIT] p=0.007  "電気消したいんだけど。"   (flat tone — more coming) → keep listening
 ```
 
-特殊枠は SenseVoice が言語 ID / 感情 / 音響イベント 用に使うクエリで、
-プロソディの情報を持っているため一緒に入れています。
+## Why not just add a turn-detection model?
 
-## セットアップ
+|                     | this repo                     | Pipecat Smart Turn v3 | LiveKit Turn Detector |
+| ------------------- | ----------------------------- | --------------------- | --------------------- |
+| Extra model         | **none** (shares the ASR)     | 8 MB / 8 M params     | 66 MB / 135 M params  |
+| Extra latency       | **~0** (reuses the same pass) | separate inference    | separate inference    |
+| Signals used        | semantics **+** prosody       | prosody (audio only)  | semantics + prosody   |
+| Transcript          | **falls out of the same pass** | needs a separate ASR  | needs a separate ASR (usually cloud) |
+
+Off-the-shelf detectors are trained to be speaker- and language-agnostic, which is exactly
+why they miss *your* speech patterns. This repo is built around **retraining on your own
+voice**: on our hardware a general model separated only 12.5% of minimal prosody pairs,
+while a head trained on ~80 pairs of the target speaker reached 88%.
+
+## How it works
+
+The distributed SenseVoice-Small ONNX fuses the encoder and the CTC projection into one
+graph whose only output is `logits`. The 512-dim frame embeddings we want are stuck inside.
+
+Rather than re-exporting the model, we perform **graph surgery**: add the CTC projection's
+input tensor as a second graph output. It works on both the fp32 and int8 checkpoints.
+
+<!-- TODO: docs/internals.svg — encoder internals and pooling -->
+
+What is actually inside (measured from the ONNX):
+
+```
+x (N, T, 560)              80-dim fbank, LFR window 7 / shift 6, CMVN applied
+  + language / text_norm   selected from embed.weight [16, 560] (prompt embeddings)
+        │
+        │  4 special query frames are prepended:  [LID] [SER] [AED] [ITN]
+        ▼
+  encoders0 : 1 layer   ┐
+  encoders  : 49 layers ┘  50 SAN-M blocks, hidden 512, FFN 2048, FSMN kernel 11
+        ▼
+  tp_norm  (final LayerNorm)
+        ▼
+  /encoder/tp_norm/Add_1_output_0   ◄── the tensor we expose, (N, T, 512)
+        ├───────────────────────────┐
+        ▼                           ▼
+  ctc_lo (512 → 25055)          turn head
+        ▼                           ▼
+  logits → greedy decode        pool → 2048 → 1 → sigmoid
+```
+
+234 M parameters total; the turn head adds 30 KB.
+
+**Pooling matters.** End-of-turn depends on how the utterance *ends*, and a plain mean over
+all frames washes that out. We keep the tail thick:
+
+```
+hidden (T, 512)
+  ├ [0:4]  special frames  ─► mean ─┐ 512   LID/SER/AED queries — carry paralinguistics
+  └ [4:]   speech frames            │
+       ├ all frames        ─► mean ─┤ 512   what was said
+       ├ last 8 frames     ─► mean ─┤ 512   the final ~0.5 s — the intonation contour
+       └ last frame        ─────────┘ 512   the very end
+                                concat = 2048
+```
+
+One post-LFR frame is 60 ms, so eight frames ≈ 0.5 s.
+
+## Install
 
 ```bash
 git clone https://github.com/<you>/sensevoice-turn && cd sensevoice-turn
 pip install -r requirements.txt
 
-# SenseVoice の ONNX を取得（sherpa-onnx 配布版）
+# Get the SenseVoice ONNX (sherpa-onnx distribution)
 curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
 tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
 
-# encoder 出力を生やす（一度だけ・数秒）
+# Expose the encoder output (once, takes seconds)
 python -m sensevoice_turn.expose \
   sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/model.int8.onnx \
   model.int8.encout.onnx
 ```
 
-## 使う
+## Use
 
 ```bash
 python -m sensevoice_turn.infer sample.wav \
@@ -80,127 +114,153 @@ python -m sensevoice_turn.infer sample.wav \
 from sensevoice_turn import SemanticTurn
 
 st = SemanticTurn("model.int8.encout.onnx", "models/turn_head.npz", "tokens.txt")
-r = st(audio)                    # float32, 16kHz, mono
-r["probability"]   # 話し終わった確率
-r["is_complete"]   # 閾値を超えたか
-r["text"]          # 同じ推論で得た文字起こし（再度 ASR を回す必要はない）
+r = st(audio)          # float32, 16 kHz, mono
+r["probability"]       # P(end of turn)
+r["is_complete"]       # above the calibrated threshold?
+r["text"]              # transcript from the same pass — don't run ASR twice
 ```
 
-VAD が無音を検出したタイミングで呼ぶ想定です:
+Call it when your VAD reports a pause:
+
+<!-- TODO: docs/runtime-flow.svg — VAD pause → decide → commit / keep listening -->
 
 ```python
-if vad.pause_after_speech(400):          # 400ms の無音
+if vad.pause_after_speech(400):        # 400 ms of silence
     r = st(audio_so_far)
     if r["is_complete"]:
-        handle(r["text"])                # 確定（文字起こしは取得済み）
+        handle(r["text"])              # commit; transcript already in hand
     else:
-        keep_listening()                 # まだ考えている
+        keep_listening()               # they're still thinking
 ```
 
-同梱の `models/turn_head.npz` は**日本語・単一話者**で学習したものです。
-そのままでも動きますが、**自分の声で学習し直すと大きく良くなります**（次項）。
+Runtime loop as deployed:
 
-## 自分の声で学習する
+```
+mic → 32 ms frames → silero VAD
+                        │  speech ≥ 500 ms, then 400 ms of silence = pause
+                        ▼
+              one encoder forward pass          ← the only place it runs
+                   ├─ transcript
+                   └─ p
+                        ▼
+              p ≥ 0.70 ?  ── yes ─► commit (reuse the transcript)
+                        │
+                        no ─► keep listening, decide again at the next pause
+                        ▼
+              safety net: force-commit after 5 s of continuous silence
+```
 
-GPU は要りません。**CPU だけで数分**で終わります（Raspberry Pi でも可）。
+The bundled `models/turn_head.npz` was trained on **Japanese, single speaker**. It works as
+a starting point, but training on your own voice is where the accuracy comes from.
 
-### 1. 録音を集める
+## Train on your own voice
+
+No GPU. **CPU only, a few minutes** — it runs on a Raspberry Pi.
+
+### 1. Collect recordings
 
 ```bash
 python -m sensevoice_turn.collect --out data/recordings
-# → http://localhost:8100
+# open http://localhost:8100
 ```
 
-ブラウザで押している間だけ録音し、カテゴリを付けて保存します。
-**マイクは HTTPS か localhost でしか使えません**（スマホから使うなら Tailscale / ngrok 等）。
+Hold the button to record, release to stop, tap to save. **Microphone access requires HTTPS
+or localhost** — to record from a phone, expose it via Tailscale, ngrok, or similar.
 
-いちばん大事なのは **ペア録音** です:
+The category that matters most is **paired recording**:
 
-> 同じ文を「**⤵ 語尾を下げて言い切る**」と「**→ 語尾を平坦に（まだ続ける気持ち）**」の
-> 2 通りで録る。**文字列が同じ**なので、モデルは意味では区別できず、
-> **音（抑揚）を聞くしかなくなります。**
+> Say the same sentence twice: once **⤵ with a falling, finished tone**, once **→ flat, as if
+> a condition is coming next**. The transcript is identical, so the model cannot cheat on
+> wording — it is forced to listen to the intonation.
 
-これが決定的でした。ペア無しで学習したモデルは抑揚ペアを 16 組中 2 組しか区別できず、
-ペアを入れたら 32 組中 28 組になりました。
+This was the decisive ingredient. Trained without pairs, the head separated 2 of 16 pairs.
+With pairs, 28 of 32.
 
-目安は **ペア 40〜80 組**、他のカテゴリは各 30 件程度。
+Aim for **40–80 pairs**, plus ~30 clips of each other category.
 
-コツ:
+Two things learned the hard way:
 
-- 「〜したい」「〜かな」で終わる文は**ペアに使わない**。言い切りの形なので、
-  継続として自然に演じられず、**嘘の抑揚**を教えてしまいます（実際に外したら精度が上がりました）。
-- 「〜なんだけど」「〜して」「体言止め」は、言い切りにも継続にも自然になるので向いています。
+- **Don't use sentences that can't naturally continue.** In Japanese, "〜したい" / "〜かな"
+  (desiderative) are already complete; forcing a "flat" take produces *fake* prosody and
+  teaches the model a lie. Dropping them measurably improved accuracy.
+- Forms that work well in both readings: "〜なんだけど" (concessive), bare "〜して"
+  (imperative that can be chained), and noun-final phrases.
 
-### 2. データセットを作る
+### 2. Build the dataset
 
 ```bash
 python -m sensevoice_turn.build --rec data/recordings --out data/dataset
 ```
 
-ここが地味に効きます。**推論時と同じ形にする**ためです。
+This step quietly matters: it makes training data **shaped like inference input**.
 
-素朴にやると「学習＝発話全体 / 実行時＝ポーズまでの途中音声」で入力分布がずれます。
-そこで録音を VAD に流し、**判定が走るポーズ地点ごとに切って** 1 サンプルにします。
-ラベルは自動で付きます:
+The naive approach trains on whole utterances while inference sees a *partial* utterance
+ending at a pause — a train/serve skew. Instead we replay each recording through the VAD and
+cut a sample at **every pause where the detector would actually fire**. Labels come for free:
 
 ```
-そのポーズの後にまだ発話が残っている → noturn（ここで確定してはいけない）
-後に発話が無い（最後のポーズ）        → その録音のラベル
+speech still remains after this pause  → noturn   (must not commit here)
+nothing after it (final pause)         → the recording's own label
 ```
 
-これで「音量を…（ポーズ）…30% にして」の**中間ポーズ**が、
-人工的な切り貼り無しに現実的な負例になります。
+So the mid-utterance pause in "turn the volume … (pause) … up to 30%" becomes a realistic
+negative, with no synthetic splicing.
 
-### 3. 学習する
+<!-- TODO: docs/training-pipeline.svg — recordings → pause-point cuts → auto labels → head -->
+
+### 3. Train
 
 ```bash
 python -m sensevoice_turn.train --data data/dataset --model model.int8.encout.onnx
 ```
 
-encoder は凍結したまま、その上の線形 1 層だけを学習します。
-学習後に**閾値スイープ**（早切れと待ちすぎのトレードオフ表）が出て、推奨値が `models/turn_head.npz` に埋め込まれます。
+The encoder stays frozen; only the linear head is fitted. Afterwards a **threshold sweep**
+prints the trade-off and the recommended value is baked into `models/turn_head.npz`:
 
 ```
-閾値 |  早切れ(切りすぎ) | 待ちすぎ
-0.50 |        5.1%       |    5.8%
-0.70 |        2.0%       |    5.8%   ← ここまで無料で改善（推奨）
-0.80 |        1.0%       |    8.7%
-0.95 |        0.0%       |   15.9%
+thresh |  cut off early | waited too long
+0.50   |      5.1%      |      5.8%
+0.70   |      2.0%      |      5.8%    ← free improvement, recommended
+0.80   |      1.0%      |      8.7%
+0.95   |      0.0%      |     15.9%
 ```
 
-**早切れ**（まだ話しているのに切る）と**待ちすぎ**（言い終わったのに待つ）は、
-体感の重さが違います。切られると言い直しになるので、早切れを重く見るのが普通です。
+The two errors are not equally bad. Being **cut off early** forces the user to repeat
+themselves; **waiting too long** just feels sluggish. Tune accordingly.
 
-## 実測（Raspberry Pi 5 / int8 / 2 スレッド）
+## Measured results (Raspberry Pi 5, int8, 2 threads)
 
-| | 汎用モデル（比較用） | 自分の声で学習後 |
-|---|---|---|
-| 抑揚ペアの判別 | 2 / 16 組 | **28 / 32 組** |
-| 早切れ | 33.3% | **2.0%** |
-| 待ちすぎ | 0% | 5.8% |
-| 正解率 | 84.9% | **94.6%** |
-| レイテンシ | — | 中央値 326ms / p90 559ms |
+|                          | general-purpose baseline | trained on target speaker |
+| ------------------------ | ------------------------ | ------------------------- |
+| Minimal prosody pairs    | 2 / 16                   | **28 / 32**               |
+| Cut off early            | 33.3%                    | **2.0%**                  |
+| Waited too long          | 0%                       | 5.8%                      |
+| Accuracy                 | 84.9%                    | **94.6%**                 |
+| Latency                  | —                        | median 326 ms / p90 559 ms |
 
-検証データは**学習に一切使っていない実録音**（考え込み・フィラー・ペア）で、
-ペアは同じ文が train と val の両方に出ないよう**文単位で分割**しています。
+Validation uses **real held-out recordings** (hesitations, fillers, pairs) that never appear
+in training, and pairs are split **by sentence** so the same wording can't leak across the
+split.
 
-## 制限
+## Limitations
 
-- **単一話者・日本語**で学習した重みを同梱しています。他の言語・話者では学習し直してください
-  （SenseVoice 自体は中/英/日/韓/粤に対応しているので、素材さえあれば同じ手順で学習できます）。
-- ターン判定は**ポーズのたびに encoder を前進**させます。発話が長いとコストが伸びるため、
-  既定では**直近 8 秒**だけを見ます（`max_tail_sec`）。
-- 学習に使う録音は**自分で用意する必要があります**。同梱していません（声は個人情報です）。
+- The bundled head is **one speaker, Japanese**. Retrain for other speakers or languages
+  (SenseVoice itself covers zh/en/ja/ko/yue, so the same recipe applies).
+- The encoder runs at every pause, so cost grows with utterance length. By default only the
+  **last 8 seconds** are considered (`max_tail_sec`).
+- Training recordings are **not included** — voice data is personal. Record your own.
 
-## ライセンスと謝辞
+## License and credits
 
-- このリポジトリのコード: MIT
-- **SenseVoice / SenseVoiceSmall**: [FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice) — モデル本体のライセンスは
-  [FunASR](https://github.com/modelscope/FunASR?tab=readme-ov-file#license) に従います。モデルは各自で取得してください。
-- ONNX 配布と export スクリプト: [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Xiaomi Corp., Fangjun Kuang 氏）
+- Code in this repository: MIT
+- **SenseVoice / SenseVoiceSmall**: [FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice) —
+  the model itself is governed by the
+  [FunASR license](https://github.com/modelscope/FunASR?tab=readme-ov-file#license). Download it yourself.
+- ONNX distribution and export script: [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Xiaomi Corp., Fangjun Kuang)
 - VAD: [silero-vad](https://github.com/snakers4/silero-vad)
 
-「ASR と終端検出を同時に学習する」という発想自体は新しくありません
-（Google のオンデバイス ASR は以前から end-of-query を統合しています）。
-このリポジトリの狙いは、それを**ローカルの公開 ASR で、追加モデルなしに、
-自分のデータで**できるようにすることです。
+Jointly modelling ASR and endpointing is not a new idea — Google shipped end-of-query
+prediction inside on-device ASR years ago. What's awkward today is that open voice stacks
+put the ASR behind a cloud API, so they *can't* reach into the encoder and have to bolt on a
+second model. This repo does the joint version with a **local, open ASR, no extra model, and
+your own data**.
