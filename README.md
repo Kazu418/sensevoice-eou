@@ -26,6 +26,44 @@ Same words, opposite decision — the model is listening to the **prosody**:
 [WAIT] p=0.007  "電気消したいんだけど。"   (flat tone — more coming) → keep listening
 ```
 
+## Quick start
+
+Zero to a working turn detector. CPU only — no GPU, no cloud, no API key.
+
+```bash
+git clone https://github.com/<you>/sensevoice-turn && cd sensevoice-turn
+pip install -r requirements.txt
+
+# 1. Get SenseVoice (~1 GB) and expose its encoder output (a few seconds)
+MODEL=sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$MODEL.tar.bz2
+tar xf $MODEL.tar.bz2
+python -m sensevoice_turn.expose $MODEL/model.int8.onnx model.int8.encout.onnx
+
+# 2. Try it on any 16 kHz wav
+python -m sensevoice_turn.infer your.wav \
+  --model model.int8.encout.onnx --head models/turn_head.npz --tokens $MODEL/tokens.txt
+```
+
+```
+[END ] p=1.000 204ms  電気消したいんだけど。      ← falling tone, commit
+[WAIT] p=0.007 215ms  電気消したいんだけど。      ← flat tone, keep listening
+```
+
+The bundled head is a **demo trained on one Japanese speaker** — enough to check the wiring,
+not enough for your setup. Training your own takes three CPU-only commands:
+
+```bash
+python -m sensevoice_turn.collect --out data/recordings     # record in the browser
+python -m sensevoice_turn.build   --rec data/recordings --out data/dataset
+python -m sensevoice_turn.train   --data data/dataset --model model.int8.encout.onnx
+python -m sensevoice_turn.eval    --rec data/recordings --data data/dataset \
+  --model model.int8.encout.onnx --val-only                 # honest, per-utterance
+```
+
+Details, and the one recording trick that matters, in [Train on your own
+voice](#train-on-your-own-voice).
+
 ## Why not just add a turn-detection model?
 
 |                     | this repo                     | Pipecat Smart Turn v3 | LiveKit Turn Detector |
@@ -88,29 +126,7 @@ hidden (T, 512)
 
 One post-LFR frame is 60 ms, so eight frames ≈ 0.5 s.
 
-## Install
-
-```bash
-git clone https://github.com/<you>/sensevoice-turn && cd sensevoice-turn
-pip install -r requirements.txt
-
-# Get the SenseVoice ONNX (sherpa-onnx distribution)
-curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
-tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
-
-# Expose the encoder output (once, takes seconds)
-python -m sensevoice_turn.expose \
-  sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/model.int8.onnx \
-  model.int8.encout.onnx
-```
-
-## Use
-
-```bash
-python -m sensevoice_turn.infer sample.wav \
-  --model model.int8.encout.onnx \
-  --tokens sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tokens.txt
-```
+## Use it from Python
 
 ```python
 from sensevoice_turn import SemanticTurn
