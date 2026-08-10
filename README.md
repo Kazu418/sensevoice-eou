@@ -228,19 +228,55 @@ thresh |  cut off early | waited too long
 The two errors are not equally bad. Being **cut off early** forces the user to repeat
 themselves; **waiting too long** just feels sluggish. Tune accordingly.
 
-## Measured results (Raspberry Pi 5, int8, 2 threads)
+### 4. Check it end to end
 
-|                          | general-purpose baseline | trained on target speaker |
-| ------------------------ | ------------------------ | ------------------------- |
-| Minimal prosody pairs    | 2 / 16                   | **28 / 32**               |
-| Cut off early            | 33.3%                    | **2.0%**                  |
-| Waited too long          | 0%                       | 5.8%                      |
-| Accuracy                 | 84.9%                    | **94.6%**                 |
-| Latency                  | —                        | median 326 ms / p90 559 ms |
+```bash
+python -m sensevoice_turn.eval --rec data/recordings --data data/dataset \
+  --model model.int8.encout.onnx --val-only
+```
 
-Validation uses **real held-out recordings** (hesitations, fillers, pairs) that never appear
-in training, and pairs are split **by sentence** so the same wording can't leak across the
-split.
+Clip accuracy is not the number you care about. This replays whole recordings through the
+real VAD loop and reports **per-utterance** outcomes — including whether the model ever
+committed *while the speaker was still going*, which is the failure users actually notice.
+
+## Measured results
+
+Hardware: **Raspberry Pi 5 (4 cores, 16 GB)**, `model.int8.encout.onnx`, onnxruntime CPU.
+
+### End-to-end, per utterance
+
+Clip-level accuracy flatters a turn detector, because at runtime an utterance passes
+**several** pauses and the **first** "commit" ends it — being right later doesn't help. So
+this is measured by replaying whole recordings through the real VAD loop, on **held-out**
+recordings only (82 utterances; their sentences never appear in training).
+
+| | rate |
+| --- | --- |
+| **Cut off early** (still talking, committed anyway) | **0.0%**  (0/82) |
+| False commit (should have waited, committed by the end) | 2.4%  (2/82) |
+| Missed (finished, but never committed → waits for the safety net) | 4.9%  (4/82) |
+| **Per-utterance success** | **92.7%**  (76/82) |
+
+The failure that actually hurts — getting cut off mid-sentence — did not happen once.
+
+For reference, the same held-out clips scored per-fragment: accuracy 94.6%, cut-off 2.0%,
+waited 5.8%; and a general-purpose baseline separated only 2/16 minimal prosody pairs versus
+**28/32** here.
+
+### Latency (median over 40 clips, median clip 2.0 s)
+
+| threads | median | p90 | max | RTF |
+| --- | --- | --- | --- | --- |
+| 1 | 231 ms | 739 ms | 871 ms | 0.11 |
+| **2** | **163 ms** | 476 ms | 588 ms | **0.078** |
+| 4 | 191 ms | 492 ms | 617 ms | 0.090 |
+
+Two threads is the sweet spot on a Pi 5 — four threads contend with the rest of the system
+and get slower. Peak RSS ≈ 1.1 GB with the model loaded; the int8 ONNX is 228 MB on disk and
+the turn head is 9 KB.
+
+Because the head rides along with an ASR pass you were going to run anyway, the *marginal*
+cost of the turn decision is the pooling and a dot product — microseconds.
 
 ## Limitations
 
