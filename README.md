@@ -33,10 +33,10 @@ Same words, opposite decision — the model is listening to the **prosody**:
 | Signals used        | semantics **+** prosody       | prosody (audio only)  | semantics + prosody   |
 | Transcript          | **falls out of the same pass** | needs a separate ASR  | needs a separate ASR (usually cloud) |
 
-Off-the-shelf detectors are trained to be speaker- and language-agnostic, which is exactly
-why they miss *your* speech patterns. This repo is built around **retraining on your own
-voice**: on our hardware a general model separated only 12.5% of minimal prosody pairs,
-while a head trained on ~80 pairs of the target speaker reached 88%.
+The table above is about **architecture and cost**, not a quality benchmark — those
+detectors are general-purpose, multi-speaker, multi-language systems and this is not.
+The point of this repo is the opposite trade: give up generality, and **train a tiny head on
+your own voice and your own command vocabulary**, riding on an ASR pass you already run.
 
 ## How it works
 
@@ -239,29 +239,34 @@ Clip accuracy is not the number you care about. This replays whole recordings th
 real VAD loop and reports **per-utterance** outcomes — including whether the model ever
 committed *while the speaker was still going*, which is the failure users actually notice.
 
-## Measured results
+## Measured results (read the caveats first)
 
-Hardware: **Raspberry Pi 5 (4 cores, 16 GB)**, `model.int8.encout.onnx`, onnxruntime CPU.
+> **These numbers are not a benchmark.** They describe one speaker, one language, one
+> microphone, one recording session, and a command vocabulary of 38 sentence templates,
+> evaluated on 82 utterances. They tell you *the pipeline trains and runs*; they tell you
+> almost nothing about how it will do on your data. Nobody should cite them as a comparison
+> against general-purpose turn detectors — see [Why these numbers don't
+> transfer](#why-these-numbers-dont-transfer).
+
+Hardware: **Raspberry Pi 5** (4 cores, 16 GB), `model.int8.encout.onnx`, onnxruntime CPU.
 
 ### End-to-end, per utterance
 
 Clip-level accuracy flatters a turn detector, because at runtime an utterance passes
 **several** pauses and the **first** "commit" ends it — being right later doesn't help. So
-this is measured by replaying whole recordings through the real VAD loop, on **held-out**
-recordings only (82 utterances; their sentences never appear in training).
+whole recordings are replayed through the real VAD loop. Held-out only: their sentences never
+appear in training.
 
-| | rate |
-| --- | --- |
-| **Cut off early** (still talking, committed anyway) | **0.0%**  (0/82) |
-| False commit (should have waited, committed by the end) | 2.4%  (2/82) |
-| Missed (finished, but never committed → waits for the safety net) | 4.9%  (4/82) |
-| **Per-utterance success** | **92.7%**  (76/82) |
+| | rate (n = 82) | 95% CI |
+| --- | --- | --- |
+| **Cut off early** (still talking, committed anyway) | **0.0%** (0/82) | 0 – 4.5% |
+| False commit (should have waited) | 2.4% (2/82) | 0.7 – 8.5% |
+| Missed (finished, never committed → waits for the safety net) | 4.9% (4/82) | 1.9 – 11.9% |
+| **Per-utterance success** | **92.7%** (76/82) | 84.9 – 96.6% |
 
-The failure that actually hurts — getting cut off mid-sentence — did not happen once.
-
-For reference, the same held-out clips scored per-fragment: accuracy 94.6%, cut-off 2.0%,
-waited 5.8%; and a general-purpose baseline separated only 2/16 minimal prosody pairs versus
-**28/32** here.
+With n = 82 the intervals are wide: "0% cut-off" honestly means "below roughly 4%", not zero.
+Per-fragment scoring of the same clips gives 94.6% accuracy — about 2 points optimistic
+compared to the sequential evaluation, which is the honest one.
 
 ### Latency (median over 40 clips, median clip 2.0 s)
 
@@ -271,12 +276,35 @@ waited 5.8%; and a general-purpose baseline separated only 2/16 minimal prosody 
 | **2** | **163 ms** | 476 ms | 588 ms | **0.078** |
 | 4 | 191 ms | 492 ms | 617 ms | 0.090 |
 
-Two threads is the sweet spot on a Pi 5 — four threads contend with the rest of the system
-and get slower. Peak RSS ≈ 1.1 GB with the model loaded; the int8 ONNX is 228 MB on disk and
-the turn head is 9 KB.
+Two threads is the sweet spot on a Pi 5 — four contend with the rest of the system and get
+slower. Peak RSS ≈ 1.1 GB with the model loaded; the int8 ONNX is 228 MB on disk, the turn
+head 9 KB. Since the head rides on an ASR pass you were going to run anyway, the *marginal*
+cost of the turn decision is a pooling step and a dot product.
 
-Because the head rides along with an ASR pass you were going to run anyway, the *marginal*
-cost of the turn decision is the pooling and a dot product — microseconds.
+**The latency numbers do transfer.** They are a property of the model and the hardware, not
+of the dataset. The accuracy numbers do not.
+
+### Why these numbers don't transfer
+
+- **One speaker, one session, one mic.** Validation is held out *by sentence*, not by
+  speaker, recording condition, or day. Nothing here measures robustness to a different
+  voice, room, or microphone — the usual reasons a turn detector fails in the wild.
+- **A very narrow domain.** Short smart-home / music commands in Japanese, drawn from 38
+  templates. Open-ended conversation, long dictation, code-switching, and disfluency-heavy
+  speech are all untested.
+- **Tiny sample.** 82 utterances, 32 prosody pairs. Every rate above has a wide interval.
+- **The "2/16 vs 28/32" pair comparison is not apples to apples.** It measures a
+  general-purpose detector on a personalized task it was never trained for. It shows that
+  personalization helps *here*; it is not evidence that this approach is better than
+  Smart Turn or LiveKit in general. Those models are solving a much harder problem — arbitrary
+  speakers and languages — and would very likely beat this head outside its narrow domain.
+- **The head shipped in `models/turn_head.npz` is a demo, not a product.** Treat it as a
+  smoke test that the plumbing works, then train your own; that is the entire point of the
+  training pipeline being three CPU-only commands.
+
+What the measurements *do* support: the graph surgery works, the encoder embeddings carry
+enough prosody to separate minimal pairs, the training loop converges on ~100 recordings, and
+the whole thing runs comfortably in real time on a Raspberry Pi.
 
 ## Limitations
 
