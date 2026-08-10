@@ -13,6 +13,10 @@ loaded, so the turn decision is essentially free — small enough to run on a Ra
 
 *Everything in this figure was measured from the ONNX graph, not copied from a paper.*
 
+<sub>Two labels in the figure are being corrected in the next revision: pooling term (4) is the
+**last frame** (index −1), and term (3) captures the **final intonation contour** rather than
+"suppression". The code in this repo is authoritative.</sub>
+
 ```
 audio ──► SenseVoice encoder ──┬─► CTC projection ─► transcript  (as before)
         (one forward pass)     └─► turn head      ─► P(end of turn)
