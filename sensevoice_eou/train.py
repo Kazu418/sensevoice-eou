@@ -4,7 +4,7 @@ encoder は凍結したまま埋め込みを取り出し、その上のロジス
 学習対象は 2048→1 の線形1層なので、数百サンプルなら CPU で数分で終わる
 (Raspberry Pi でも動く)。GPU も Modal も要らない。
 
-    python -m sensevoice_turn.train --data data/dataset --model model.int8.encout.onnx
+    python -m sensevoice_eou.train --data data/dataset --model model.int8.encout.onnx
 
 出力:
   models/turn_head.npz     … 学習済みヘッド(推論はこれだけあればよい, 約30KB)

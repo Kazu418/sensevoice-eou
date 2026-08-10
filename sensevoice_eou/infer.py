@@ -6,7 +6,7 @@
 ターン判定のために別モデルを走らせないので、追加コストはほぼゼロ
 (ヘッドは 2048→1 の線形1層、29KB)。
 
-    from sensevoice_turn import SemanticTurn
+    from sensevoice_eou import SemanticTurn
     st = SemanticTurn("model.int8.encout.onnx", "models/turn_head.npz")
     r = st(audio_float32_16k)
     r["probability"], r["text"]
@@ -55,7 +55,7 @@ class SemanticTurn:
         if len(self.sess.get_outputs()) < 2:
             raise SystemExit(
                 "この ONNX には encoder 出力がありません。先に "
-                "`python -m sensevoice_turn.expose <model.onnx> <out.onnx>` を実行してください")
+                "`python -m sensevoice_eou.expose <model.onnx> <out.onnx>` を実行してください")
 
         self.W = self.b = None
         self.n_special, self.tail_frames = 4, 8

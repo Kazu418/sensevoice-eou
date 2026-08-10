@@ -10,7 +10,7 @@
 これで「音量を…(ポーズ)…30%にして」の中間ポーズが、人工的な継ぎ接ぎ無しに
 現実的な negative になる。
 
-    python -m sensevoice_turn.build --rec data/recordings --out data/dataset
+    python -m sensevoice_eou.build --rec data/recordings --out data/dataset
 """
 from __future__ import annotations
 

@@ -1,4 +1,6 @@
-# sensevoice-turn
+# sensevoice-eou
+
+*End-of-utterance (turn) detection that rides along with SenseVoice ASR.*
 
 **Get the transcript *and* "did they finish talking?" out of a single SenseVoice forward pass.**
 
@@ -35,17 +37,17 @@ Same words, opposite decision — the model is listening to the **prosody**:
 Zero to a working turn detector. CPU only — no GPU, no cloud, no API key.
 
 ```bash
-git clone https://github.com/<you>/sensevoice-turn && cd sensevoice-turn
+git clone https://github.com/Kazu418/sensevoice-eou && cd sensevoice-eou
 pip install -r requirements.txt
 
 # 1. Get SenseVoice (~1 GB) and expose its encoder output (a few seconds)
 MODEL=sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
 curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$MODEL.tar.bz2
 tar xf $MODEL.tar.bz2
-python -m sensevoice_turn.expose $MODEL/model.int8.onnx model.int8.encout.onnx
+python -m sensevoice_eou.expose $MODEL/model.int8.onnx model.int8.encout.onnx
 
 # 2. Try it on any 16 kHz wav
-python -m sensevoice_turn.infer your.wav \
+python -m sensevoice_eou.infer your.wav \
   --model model.int8.encout.onnx --head models/turn_head.npz --tokens $MODEL/tokens.txt
 ```
 
@@ -58,10 +60,10 @@ The bundled head is a **demo trained on one Japanese speaker** — enough to che
 not enough for your setup. Training your own takes three CPU-only commands:
 
 ```bash
-python -m sensevoice_turn.collect --out data/recordings     # record in the browser
-python -m sensevoice_turn.build   --rec data/recordings --out data/dataset
-python -m sensevoice_turn.train   --data data/dataset --model model.int8.encout.onnx
-python -m sensevoice_turn.eval    --rec data/recordings --data data/dataset \
+python -m sensevoice_eou.collect --out data/recordings     # record in the browser
+python -m sensevoice_eou.build   --rec data/recordings --out data/dataset
+python -m sensevoice_eou.train   --data data/dataset --model model.int8.encout.onnx
+python -m sensevoice_eou.eval    --rec data/recordings --data data/dataset \
   --model model.int8.encout.onnx --val-only                 # honest, per-utterance
 ```
 
@@ -133,7 +135,7 @@ One post-LFR frame is 60 ms, so eight frames ≈ 0.5 s.
 ## Use it from Python
 
 ```python
-from sensevoice_turn import SemanticTurn
+from sensevoice_eou import SemanticTurn
 
 st = SemanticTurn("model.int8.encout.onnx", "models/turn_head.npz", "tokens.txt")
 r = st(audio)          # float32, 16 kHz, mono
@@ -182,7 +184,7 @@ No GPU. **CPU only, a few minutes** — it runs on a Raspberry Pi.
 ### 1. Collect recordings
 
 ```bash
-python -m sensevoice_turn.collect --out data/recordings
+python -m sensevoice_eou.collect --out data/recordings
 # open http://localhost:8100
 ```
 
@@ -211,7 +213,7 @@ Two things learned the hard way:
 ### 2. Build the dataset
 
 ```bash
-python -m sensevoice_turn.build --rec data/recordings --out data/dataset
+python -m sensevoice_eou.build --rec data/recordings --out data/dataset
 ```
 
 This step quietly matters: it makes training data **shaped like inference input**.
@@ -233,7 +235,7 @@ negative, with no synthetic splicing.
 ### 3. Train
 
 ```bash
-python -m sensevoice_turn.train --data data/dataset --model model.int8.encout.onnx
+python -m sensevoice_eou.train --data data/dataset --model model.int8.encout.onnx
 ```
 
 The encoder stays frozen; only the linear head is fitted. Afterwards a **threshold sweep**
@@ -253,7 +255,7 @@ themselves; **waiting too long** just feels sluggish. Tune accordingly.
 ### 4. Check it end to end
 
 ```bash
-python -m sensevoice_turn.eval --rec data/recordings --data data/dataset \
+python -m sensevoice_eou.eval --rec data/recordings --data data/dataset \
   --model model.int8.encout.onnx --val-only
 ```
 

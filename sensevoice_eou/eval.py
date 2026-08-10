@@ -4,7 +4,7 @@
 **最初に「確定」と判定した時点で打ち切られる**ため、後のポーズで正解できても手遅れです。
 つまり 1発話につき 1回でも誤爆したら失敗。ここではその連鎖込みで測ります。
 
-    python -m sensevoice_turn.eval --rec data/recordings --data data/dataset \
+    python -m sensevoice_eou.eval --rec data/recordings --data data/dataset \
         --model model.int8.encout.onnx --head models/turn_head.npz
 
 指標:

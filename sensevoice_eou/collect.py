@@ -1,6 +1,6 @@
 """学習データ収集サーバ — ブラウザ(スマホ可)で録音してラベル付き音声を貯める。
 
-    python -m sensevoice_turn.collect --out data/recordings
+    python -m sensevoice_eou.collect --out data/recordings
     → http://localhost:8100 を開く
 
 カテゴリ:

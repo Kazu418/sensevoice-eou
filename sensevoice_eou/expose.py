@@ -15,7 +15,7 @@ CTC 射影(MatMul)の入力テンソル `/encoder/tp_norm/Add_1_output_0` をグ
 (int8 は量子化の手前にある)ので、同じ手順で処理できる。
 
 使い方:
-    python -m sensevoice_turn.expose model.int8.onnx model.int8.encout.onnx
+    python -m sensevoice_eou.expose model.int8.onnx model.int8.encout.onnx
 """
 from __future__ import annotations
 
