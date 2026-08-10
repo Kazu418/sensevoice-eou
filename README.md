@@ -9,7 +9,9 @@ distinction lives in the words and in the intonation, not in the length of the g
 This repo answers it using the **ASR encoder you are already running**. No second model is
 loaded, so the turn decision is essentially free — small enough to run on a Raspberry Pi.
 
-<!-- TODO: docs/architecture.svg — one pass, two heads -->
+![SenseVoice-Small architecture and runtime flow](docs/architecture.png)
+
+*Everything in this figure was measured from the ONNX graph, not copied from a paper.*
 
 ```
 audio ──► SenseVoice encoder ──┬─► CTC projection ─► transcript  (as before)
@@ -46,7 +48,7 @@ graph whose only output is `logits`. The 512-dim frame embeddings we want are st
 Rather than re-exporting the model, we perform **graph surgery**: add the CTC projection's
 input tensor as a second graph output. It works on both the fp32 and int8 checkpoints.
 
-<!-- TODO: docs/internals.svg — encoder internals and pooling -->
+(The figure at the top shows the full internals — encoder blocks, the exposed tensor, and the pooling.)
 
 What is actually inside (measured from the ONNX):
 
@@ -122,7 +124,7 @@ r["text"]              # transcript from the same pass — don't run ASR twice
 
 Call it when your VAD reports a pause:
 
-<!-- TODO: docs/runtime-flow.svg — VAD pause → decide → commit / keep listening -->
+(Bottom half of the figure at the top.)
 
 ```python
 if vad.pause_after_speech(400):        # 400 ms of silence

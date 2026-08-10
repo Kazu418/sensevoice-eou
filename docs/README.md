@@ -4,10 +4,8 @@
 
 | ファイル | 内容 |
 |---|---|
-| `architecture.svg` | 1パス2ヘッド（audio → encoder →〔CTC=文字起こし / turnヘッド=確率〕） |
-| `internals.svg` | encoder内部とプーリング（50層SAN-M・特殊枠4フレーム・末尾8フレーム） |
-| `runtime-flow.svg` | 実行時（VADポーズ → 判定 → 確定/継続 → 安全弁） |
-| `training-pipeline.svg` | 学習（録音 → ポーズ地点で切る → 自動ラベル → ヘッド学習） |
+| `architecture.png` | **配置済み**。全体図(1パス2ヘッド + encoder内部 + プーリング + 実行時フロー) |
+| `training-pipeline.svg` | (未作成) 学習（録音 → ポーズ地点で切る → 自動ラベル → ヘッド学習） |
 
 置いたら README の該当箇所の `<!-- TODO: ... -->` を
 `![...](docs/xxx.svg)` に差し替えてください。
@@ -30,3 +28,11 @@
   3. 末尾8フレームの平均（LFR後1フレーム=60ms なので約0.5秒）
   4. 最終1フレーム
 - 実行時の定数: VADポーズ 400ms / 最小発話 500ms / 閾値 0.70 / 安全弁 5秒 / 判定対象は直近8秒
+
+## architecture.png の既知の誤り（差し替え時に修正）
+
+1. 「(4) last **17th** frame」→ 正しくは **last frame (index −1)**。コードは `h[-1]`。
+2. 「(3) ... useful for utterance-end **suppression**」→ 抑制ではなく、
+   **語尾の抑揚(下降/平坦)を捉える** の意。`captures the final intonation contour` 等が適切。
+
+※ プーリングの連結順はコード上 `[全体平均, 末尾8, 最終, 特殊枠]`。図の番号は説明用の並び。
