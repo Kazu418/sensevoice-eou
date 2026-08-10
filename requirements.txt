@@ -1,0 +1,14 @@
+# 推論に必要な最小構成
+numpy
+onnxruntime>=1.17
+torch            # torchaudio.compliance.kaldi の fbank に使用
+torchaudio
+soundfile
+
+# 学習・データ収集に必要(推論だけなら不要)
+scikit-learn     # ヘッドの学習
+silero-vad       # ポーズ検出
+fastapi          # 収集用Webアプリ
+uvicorn
+python-multipart
+onnx             # encoder出力を生やす手術
