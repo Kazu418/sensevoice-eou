@@ -11,7 +11,7 @@ distinction lives in the words and in the intonation, not in the length of the g
 This repo answers it using the **ASR encoder you are already running**. No second model is
 loaded, so the turn decision is essentially free — small enough to run on a Raspberry Pi.
 
-![SenseVoice-Small architecture and runtime flow](docs/architecture.webp)
+![SenseVoice-Small architecture and runtime flow](docs/architecture.png)
 
 *Everything in this figure was measured from the ONNX graph, not copied from a paper.*
 
@@ -247,7 +247,6 @@ thresh |  cut off early | waited too long
 
 The two errors are not equally bad. Being **cut off early** forces the user to repeat
 themselves; **waiting too long** just feels sluggish. Tune accordingly.
-
 ### 4. Check it end to end
 
 ```bash
