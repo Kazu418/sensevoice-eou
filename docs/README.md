@@ -1,6 +1,6 @@
 # docs
 
-`architecture.webp` — the figure used at the top of the README. Everything in it was measured
+`architecture.png` — the figure used at the top of the README. Everything in it was measured
 from the SenseVoice-Small ONNX graph rather than taken from a paper, so it should stay in
 sync with the code. If you regenerate it, keep these facts straight:
 
