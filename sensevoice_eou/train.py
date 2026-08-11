@@ -7,7 +7,7 @@ encoder は凍結したまま埋め込みを取り出し、その上のロジス
     python -m sensevoice_eou.train --data data/dataset --model model.int8.encout.onnx
 
 出力:
-  models/turn_head.npz     … 学習済みヘッド(推論はこれだけあればよい, 約30KB)
+  models/turn_head.npz     … 学習済みヘッド(推論はこれだけあればよい, 約9KB)
   埋め込みキャッシュ         … 2回目以降の学習が速くなる
 併せて閾値スイープ(早切れ/待ちすぎのトレードオフ表)も表示する。
 """
