@@ -11,18 +11,14 @@ distinction lives in the words and in the intonation, not in the length of the g
 This repo answers it using the **ASR encoder you are already running**. No second model is
 loaded, so the turn decision is essentially free — small enough to run on a Raspberry Pi.
 
-![SenseVoice-Small architecture and runtime flow](docs/architecture.png)
+![SenseVoice-Small architecture and runtime flow](docs/architecture.webp)
 
 *Everything in this figure was measured from the ONNX graph, not copied from a paper.*
-
-<sub>Two labels in the figure are being corrected in the next revision: pooling term (4) is the
-**last frame** (index −1), and term (3) captures the **final intonation contour** rather than
-"suppression". The code in this repo is authoritative.</sub>
 
 ```
 audio ──► SenseVoice encoder ──┬─► CTC projection ─► transcript  (as before)
         (one forward pass)     └─► turn head      ─► P(end of turn)
-                                   └ a single 2048→1 linear layer (30 KB)
+                                   └ a single 2048→1 linear layer (~9 KB)
 ```
 
 Same words, opposite decision — the model is listening to the **prosody**:
@@ -115,7 +111,7 @@ x (N, T, 560)              80-dim fbank, LFR window 7 / shift 6, CMVN applied
   logits → greedy decode        pool → 2048 → 1 → sigmoid
 ```
 
-234 M parameters total; the turn head adds 30 KB.
+234 M parameters total; the turn head adds ~9 KB.
 
 **Pooling matters.** End-of-turn depends on how the utterance *ends*, and a plain mean over
 all frames washes that out. We keep the tail thick:
